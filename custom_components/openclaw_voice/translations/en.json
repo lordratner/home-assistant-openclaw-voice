@@ -1,0 +1,45 @@
+{
+  "title": "OpenClaw Home Assistant",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect OpenClaw",
+        "description": "Pair with the OpenClaw Home Assistant plugin. Agent, model and provider credentials remain in OpenClaw.",
+        "data": {
+          "url": "OpenClaw gateway URL",
+          "pairing_code": "One-time pairing code",
+          "session_mode": "Default conversation history"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Pair OpenClaw again",
+        "description": "Create a new pairing code in OpenClaw to restore this connection.",
+        "data": {
+          "url": "OpenClaw gateway URL",
+          "pairing_code": "One-time pairing code",
+          "session_mode": "Default conversation history"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the OpenClaw plugin.",
+      "pairing_failed": "The pairing code is invalid, expired or already used. Create a new code in OpenClaw.",
+      "invalid_input": "Check the gateway URL and session mode."
+    },
+    "abort": {
+      "already_configured": "This OpenClaw connection is already configured.",
+      "reauth_successful": "OpenClaw pairing restored."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Conversation history",
+        "description": "Applies to new conversations. Automations can override the mode for one conversation. Fresh history retains the same agent and its usual knowledge and tools.",
+        "data": {
+          "session_mode": "Default conversation history"
+        }
+      }
+    }
+  }
+}

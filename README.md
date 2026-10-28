@@ -1,45 +1,85 @@
-# Home Assistant OpenClaw Voice — development foundation
+# OpenClaw Home Assistant integration
 
-Native Home Assistant client for an agent-neutral OpenClaw voice backend.
-The intended integration supplies STT, conversation and streaming-input TTS
-entities, plus text-query and interactive-satellite actions. HA chooses the
-session **mode**; OC chooses the actual agent, persistent target, model and
-speech providers. Provider credentials remain in OC.
+Native Home Assistant STT, streaming conversation and streaming-text TTS entities,
+backed by the companion [OpenClaw plugin](https://github.com/lordratner/openclaw-home-assistant).
+OC owns the selected agent, normal tools/memory/policy, actual persistent session,
+model/thinking/fast and provider credentials. HA chooses mode and playback target.
 
-**Pre-release source checkpoint; not HACS/install ready.** Config entry,
-manifest, full entity/action registration and production backend connection
-remain unfinished. Do not copy this directory into a live HA installation yet.
+**Development candidate, 0.0.1-dev.0. Not yet approved for live deployment.**
+Config/options/reauth, all three entities and both actions are implemented and
+exercised with real HA APIs in disposable runtimes. Physical playback and real
+provider acceptance are still pending; HACS discovery/publication is not claimed.
 
-## Read first
+## Setup and use
 
-- [Current execution ledger and ordered next work](implementation/STATUS.md)
-- [Full paired-product design index](planning/00-README.md)
-- [HA development plan](planning/04-HOME-ASSISTANT-DEVELOPMENT-PLAN.md)
-- [Companion OC plan](planning/03-OPENCLAW-PLUGIN-DEVELOPMENT-PLAN.md)
-- [Requirements](planning/01-REQUIREMENTS-AND-DECISIONS.md)
-- [Provenance](THIRD_PARTY_NOTICES.md)
+After a separately reviewed installation, add **OpenClaw Home Assistant** in
+Settings → Devices & services. Enter the Gateway base URL and a one-use pairing
+code issued by its administrator. Choose persistent history or a fresh session
+per conversation. Only the scoped voice token is stored in HA's config entry;
+protect HA backups. Provider keys and Gateway owner credentials stay out of HA.
 
-## Implemented here
+Select the three entities in an Assist pipeline yourself. Installation does not
+change preferred/default pipelines. Existing conversations keep their selected
+mode across options edits and integration reload; a fresh session retains normal
+agent knowledge, memory, skills and tools.
 
-- Task-local binding of an action-created native HA conversation to its mode,
-  without a global next-wake slot or private satellite field writes.
-- Bounded voice-credential HTTP speech client, incremental upload, strict
-  request/profile/job/sequence checks, no redirected credential forwarding.
-- Native `TextToSpeechEntity.async_stream_tts_audio` implementation and buffered
-  announcement-compatible method.
-- Actual HA service/chat-log/satellite-creation tests and cross-repository
-  unfinished-text-to-audio proof.
+### Ask and optionally speak
 
-Still unfinished: config/options/pairing UI, production lifecycle, capability
-projection, STT and conversation entities, both registered automation actions,
-cache/recovery/diagnostics, general codec normalization and release packaging.
-MP3 sentence stitching has decoded successfully with synthetic fixtures; other
-multi-segment containers are not presented as solved.
+```yaml
+action: openclaw_voice.query
+data:
+  config_entry_id: YOUR_ENTRY_ID
+  prompt: "Give me a short update."
+  session_mode: per_conversation
+  speaker: media_player.YOUR_SPEAKER
+response_variable: answer
+```
 
-## Development checks
+Omit `speaker` for text only. `assist_satellite` targets are also supported.
+The structured result contains conversation/mode/job/request IDs, response and
+`speech_requested`. It is not an acknowledgment of audible playback. Pass the
+returned `conversation_id` to continue that conversation without changing mode.
+An overlapping query on the same HA conversation is rejected before another turn.
 
-Requires Python >=3.14.2. The pinned test environment includes HA 2026.10.4.
-An isolated setup with uv is:
+### Start an interactive satellite conversation
+
+```yaml
+action: openclaw_voice.start_conversation
+data:
+  config_entry_id: YOUR_ENTRY_ID
+  satellite_id: assist_satellite.YOUR_SATELLITE
+  start_message: "What would you like to do?"
+  session_mode: per_conversation
+response_variable: interaction
+```
+
+The satellite must support HA's native start-conversation service and already
+select a pipeline using this connection's conversation entity. Otherwise the
+action fails before starting playback/listening. Follow-ups keep the override;
+no global settings or private satellite fields are changed.
+
+## Documentation
+
+- [Install/upgrade/rollback](docs/INSTALL.md)
+- [Protocol, limits, retention and recovery](docs/PROTOCOL.md)
+- [Evidence and remaining gates](docs/ACCEPTANCE.md)
+- [SDK streaming-transcription gap](docs/SDK-GAPS.md)
+- [Detailed planning baseline](planning/00-README.md)
+- [Current development checkpoint](implementation/STATUS.md)
+
+TTS uses a single canonical WAV stream. HA device-specific format preferences
+still apply and can add conversion latency. Native microphone data uses bounded
+finalized-utterance recognition until OC exposes a reliable streaming-finalization
+contract. Unconsumed action playback expires after 60 seconds; it cannot retain
+an action slot forever. Normal HA cache/URL retention remains HA-owned.
+
+Diagnostics are allowlisted and exclude connection/agent/client/session identities,
+credentials, conversation text and audio. Reauthentication creates a new scoped
+identity; old conversations must not silently adopt a new agent or profile.
+
+## Development
+
+Python >=3.14.2; the lock file pins the tested HA 2026.10.4 environment.
 
 ```sh
 uv venv --python 3.14 .venv
@@ -47,22 +87,12 @@ uv pip sync --python .venv/bin/python requirements-test.lock
 .venv/bin/python -m pytest -q
 ```
 
-For the native cross-repository proof, prepare the OC companion as documented in
-its README and run `npm run test:native-pair` there. It invokes this repository's
-`tests/native_pair_proof.py` with synthetic short-lived test credentials via the
-child process environment. No real provider credential is needed.
+Run `npm run test:native-pair` in the sibling OC checkout for the full isolated
+production-plugin/native-HA proof. Synthetic providers and satellite fixtures
+are not real-provider latency or audible-playback evidence.
 
-The native TTS proof withholds final input text until the first audio bytes
-arrive. This establishes early audio delivery, **not audible satellite playback**.
-Separate household testing follows production integration registration and a
-controlled live-install proposal.
+For a review archive, include only `custom_components/openclaw_voice/` source
+and metadata, excluding `__pycache__`/`.pyc`. The repository also has HACS metadata;
+no public distribution, live installation or firmware change is implied.
 
-## Configuration ownership
-
-The eventual HA options must not become a second provider/model/agent/session
-catalog. They select persistent or per-conversation mode; actions can override
-mode for that conversation and follow-ups only. Isolated history does not remove
-the OC agent's normal tools, skills or durable knowledge.
-
-Original source is MIT; see [LICENSE](LICENSE). HA and other runtime dependencies
-retain their own licenses.
+Original source is MIT; see [LICENSE](LICENSE) and [provenance](THIRD_PARTY_NOTICES.md).

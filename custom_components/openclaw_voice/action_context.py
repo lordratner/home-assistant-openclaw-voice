@@ -128,6 +128,11 @@ class ActionConversationBindings:
             self._expires[conversation_id] = self._clock() + self._ttl
         return binding.mode if binding else default
 
+    def get_mode(self, conversation_id: str) -> SessionMode | None:
+        self._purge()
+        binding = self._bindings.get(conversation_id)
+        return binding.mode if binding else None
+
     def close(self, conversation_id: str) -> None:
         self._bindings.pop(conversation_id, None)
         self._expires.pop(conversation_id, None)
@@ -139,3 +144,12 @@ class ActionConversationBindings:
             pending.active = False
         self._bindings.clear()
         self._expires.clear()
+
+    def pause(self) -> None:
+        """Fence pending tasks on reload without losing admitted conversations."""
+        self._closed = True
+        for pending in self._starts.values():
+            pending.active = False
+
+    def resume(self) -> None:
+        self._closed = False

@@ -30,9 +30,9 @@ async def backend(events=None, *, status=200, content_type="application/x-ndjson
             seen.append(json.loads(line))
         if status != 200:
             return web.Response(status=status, headers={"Location": "http://invalid.example/credential-trap"})
-        common = {"protocol_major": 1, "job_id": "job", "request_id": first["request_id"], "profile_revision": "r1"}
+        common = {"protocol_major": 1, "job_id": "00000000-0000-4000-8000-000000000001", "request_id": first["request_id"], "profile_revision": "r1"}
         frames = events or [
-            {"type": "audio_start", "segment": 0, "extension": "mp3", "mode": "sentence_buffered"},
+            {"type": "audio_start", "segment": 0, "extension": "wav", "mode": "sentence_buffered"},
             {"type": "audio_chunk", "segment": 0, "audio": base64.b64encode(b"sound").decode()},
             {"type": "audio_end", "segment": 0},
             {"type": "done", "segments": 1, "audio_bytes": 5},
@@ -63,9 +63,9 @@ async def test_native_tts_entity_receives_stream_and_buffered_announcement_path(
         entity = OpenClawTextToSpeech(client, "fixture", ["en"], "en")
         assert entity.async_supports_streaming_input()
         result = await entity.async_stream_tts_audio(TTSAudioRequest("en", {}, text()))
-        assert result.extension == "mp3"
+        assert result.extension == "wav"
         assert b"".join([chunk async for chunk in result.data_gen]) == b"sound"
-        assert await entity.async_get_tts_audio("Announcement.", "en", {}) == ("mp3", b"sound")
+        assert await entity.async_get_tts_audio("Announcement.", "en", {}) == ("wav", b"sound")
         assert seen[0] == "Bearer " + TOKEN
 
 

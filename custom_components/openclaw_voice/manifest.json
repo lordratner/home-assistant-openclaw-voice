@@ -1,0 +1,13 @@
+{
+  "domain": "openclaw_voice",
+  "name": "OpenClaw Home Assistant",
+  "version": "0.0.1-dev.0",
+  "config_flow": true,
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "dependencies": ["assist_pipeline", "conversation", "stt", "tts"],
+  "documentation": "https://github.com/lordratner/home-assistant-openclaw-voice",
+  "issue_tracker": "https://github.com/lordratner/home-assistant-openclaw-voice/issues",
+  "codeowners": ["@lordratner"],
+  "requirements": []
+}

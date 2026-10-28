@@ -33,12 +33,12 @@ async def main():
 
     async with aiohttp.ClientSession() as session:
         client = VoiceClient(session, os.environ["VOICE_PROOF_URL"],
-                             os.environ["VOICE_PROOF_TOKEN"], "fixture")
+                             os.environ["VOICE_PROOF_TOKEN"], os.environ.get("VOICE_PROOF_REVISION", "fixture"))
         entity = OpenClawTextToSpeech(client, "fixture", ["en"], "en")
         assert entity.async_supports_streaming_input()
         async with asyncio.timeout(20):
             response = await entity.async_stream_tts_audio(TTSAudioRequest("en", {}, text()))
-            assert response.extension == "mp3"
+            assert response.extension == "wav"
             audio = bytearray()
             async for chunk in response.data_gen:
                 if not first_audio.is_set():

@@ -1,0 +1,72 @@
+query:
+  name: Ask OpenClaw
+  description: Send a prompt to the configured agent and optionally speak the streamed reply.
+  fields:
+    config_entry_id:
+      name: OpenClaw connection
+      required: true
+      selector:
+        config_entry:
+          integration: openclaw_voice
+    prompt:
+      name: Prompt
+      required: true
+      selector:
+        text:
+          multiline: true
+    session_mode:
+      name: Conversation history override
+      selector:
+        select:
+          options:
+            - value: persistent
+              label: Persistent session
+            - value: per_conversation
+              label: Fresh session per conversation
+    conversation_id:
+      name: Existing conversation
+      description: Omit to start a new conversation. Existing conversations keep their original mode.
+      selector:
+        text:
+    language:
+      name: Language
+      selector:
+        text:
+    speaker:
+      name: Optional speaker
+      description: Leave empty for text only.
+      selector:
+        entity:
+          domain:
+            - assist_satellite
+            - media_player
+start_conversation:
+  name: Start an OpenClaw conversation
+  description: Use the satellite's existing OpenClaw Assist pipeline without changing defaults.
+  fields:
+    config_entry_id:
+      name: OpenClaw connection
+      required: true
+      selector:
+        config_entry:
+          integration: openclaw_voice
+    satellite_id:
+      name: Satellite
+      required: true
+      selector:
+        entity:
+          domain: assist_satellite
+    start_message:
+      name: Opening message
+      selector:
+        text:
+          multiline: true
+    session_mode:
+      name: Conversation history override
+      selector:
+        select:
+          options:
+            - value: persistent
+              label: Persistent session
+            - value: per_conversation
+              label: Fresh session per conversation
