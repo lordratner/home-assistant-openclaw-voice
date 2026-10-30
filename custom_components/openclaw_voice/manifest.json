@@ -4,7 +4,7 @@
   "version": "0.0.1-dev.6",
   "config_flow": true,
   "integration_type": "service",
-  "iot_class": "local_poll",
+  "iot_class": "local_polling",
   "dependencies": [
     "assist_pipeline",
     "conversation",

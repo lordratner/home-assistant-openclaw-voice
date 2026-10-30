@@ -12,7 +12,7 @@
           "llm_hass_api": "Home Assistant control"
         },
         "data_description": {
-          "url": "Base gateway URL, for example https://openclaw.example. Use HTTPS across untrusted networks. No token or password in this field.",
+          "url": "OpenClaw gateway base address. Use HTTPS across untrusted networks. Do not include a token or password.",
           "pairing_code": "Issue a short-lived one-use code with the companion plugin pairing.issue admin action. Never enter a Gateway admin token or provider key.",
           "session_mode": "Persistent shares the selected OC history; fresh creates separate history per HA conversation. Neither disables normal agent memory.",
           "llm_hass_api": "Optional native Assist tools for exposed entities. Other OpenClaw tools are governed separately by its agent policy."
@@ -27,7 +27,7 @@
           "session_mode": "Default conversation history"
         },
         "data_description": {
-          "url": "Base gateway URL, for example https://openclaw.example. Use HTTPS across untrusted networks. No token or password in this field.",
+          "url": "OpenClaw gateway base address. Use HTTPS across untrusted networks. Do not include a token or password.",
           "pairing_code": "Issue a short-lived one-use code with the companion plugin pairing.issue admin action. Never enter a Gateway admin token or provider key.",
           "session_mode": "Persistent shares the selected OC history; fresh creates separate history per HA conversation. Neither disables normal agent memory."
         }
@@ -39,7 +39,7 @@
           "url": "OpenClaw gateway URL"
         },
         "data_description": {
-          "url": "Base gateway URL, for example https://openclaw.example. Use HTTPS across untrusted networks. No token or password in this field."
+          "url": "OpenClaw gateway base address. Use HTTPS across untrusted networks. Do not include a token or password."
         }
       }
     },
