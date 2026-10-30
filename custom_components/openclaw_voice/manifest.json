@@ -1,10 +1,10 @@
 {
   "domain": "openclaw_voice",
   "name": "OpenClaw Home Assistant",
-  "version": "0.0.1-dev.6",
+  "codeowners": [
+    "@lordratner"
+  ],
   "config_flow": true,
-  "integration_type": "service",
-  "iot_class": "local_polling",
   "dependencies": [
     "assist_pipeline",
     "conversation",
@@ -13,9 +13,9 @@
     "tts"
   ],
   "documentation": "https://github.com/lordratner/home-assistant-openclaw-voice",
+  "integration_type": "service",
+  "iot_class": "local_polling",
   "issue_tracker": "https://github.com/lordratner/home-assistant-openclaw-voice/issues",
-  "codeowners": [
-    "@lordratner"
-  ],
-  "requirements": []
+  "requirements": [],
+  "version": "0.0.1-dev.6"
 }

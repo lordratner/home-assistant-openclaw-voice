@@ -15,6 +15,7 @@ def load(name):
 
 def main():
     manifest = load("manifest.json")
+    assert list(manifest) == ["domain", "name"] + sorted(k for k in manifest if k not in {"domain", "name"})
     assert manifest["domain"] == "openclaw_voice"
     assert manifest["config_flow"] is True
     assert manifest["integration_type"] == "service"
