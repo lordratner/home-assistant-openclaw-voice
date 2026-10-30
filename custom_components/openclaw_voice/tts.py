@@ -4,30 +4,43 @@ Uses HA's public TTSAudioRequest API and config-entry lifecycle.
 """
 from collections.abc import AsyncGenerator
 import asyncio
+from contextlib import aclosing
 
 from homeassistant.components.tts import TextToSpeechEntity, TTSAudioRequest, TTSAudioResponse
 from homeassistant.exceptions import HomeAssistantError
 
 from .client import VoiceClient, VoiceTransportError
+from .const import DOMAIN
+from .observability import observe, GLOBAL, failure_summary
+from .capabilities import language_facts
 
 
+def speech_error(reason, message, stage="synthesis_request"):
+    error = HomeAssistantError(message, translation_domain=DOMAIN, translation_key=reason)
+    error.diagnostic = {"reason": reason, "stage": stage,
+                        "category": "policy" if reason == "profile_changed" else "cancelled" if reason == "speech_cancelled" else "validation"}
+    return error
+
+
+@observe("platform", "tts_setup")
 async def async_setup_entry(hass, entry, async_add_entities):
     runtime = entry.runtime_data
-    entity = OpenClawTextToSpeech(runtime.client, entry.entry_id,
-                                  runtime.capabilities["languages"], runtime.capabilities["default_language"], runtime=runtime)
+    languages, default = language_facts(runtime.capabilities, "tts")
+    entity = OpenClawTextToSpeech(runtime.client, entry.entry_id, languages, default, runtime=runtime)
     runtime.entities["tts"] = entity
     async_add_entities([entity])
 
 
 class OpenClawTextToSpeech(TextToSpeechEntity):
     _attr_has_entity_name = True
-    _attr_name = "Speech"
+    _attr_translation_key = "speech"
 
     def __init__(self, client: VoiceClient, unique_id: str, languages: list[str], default_language: str, *, runtime=None) -> None:
         if default_language not in languages:
             raise ValueError("default language must be supported")
         self._client = client
         self._runtime = runtime
+        self.diagnostics = runtime.diagnostics if runtime and hasattr(runtime, "diagnostics") else GLOBAL
         self._jobs = {}
         if runtime:
             self._attr_device_info = runtime.device_info()
@@ -37,15 +50,15 @@ class OpenClawTextToSpeech(TextToSpeechEntity):
 
     @property
     def available(self):
-        return self._runtime.coordinator.last_update_success if self._runtime else True
+        return self._runtime.stage_available("tts") if self._runtime else True
 
     @property
     def supported_languages(self):
-        return self._runtime.capabilities["languages"] if self._runtime else self._attr_supported_languages
+        return language_facts(self._runtime.capabilities, "tts")[0] if self._runtime else self._attr_supported_languages
 
     @property
     def default_language(self):
-        return self._runtime.capabilities["default_language"] if self._runtime else self._attr_default_language
+        return language_facts(self._runtime.capabilities, "tts")[1] if self._runtime else self._attr_default_language
 
     @property
     def supported_options(self):
@@ -59,18 +72,21 @@ class OpenClawTextToSpeech(TextToSpeechEntity):
         # sentence. Native satellite preferred-format options override this.
         return {"profile_revision": client.profile_revision, "preferred_format": "wav"}
 
+    @observe("tts", "added_to_hass")
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         if self._runtime:
             self.async_on_remove(self._runtime.coordinator.async_add_listener(self.async_write_ha_state))
 
+    @observe("tts", "unload")
     async def async_will_remove_from_hass(self):
         async def cancel(job_id, client):
             try:
                 async with asyncio.timeout(5):
                     await client.cancel_job(job_id)
-            except (VoiceTransportError, TimeoutError):
-                pass
+            except (VoiceTransportError, TimeoutError) as error:
+                self.diagnostics.event("tts", "unload_cancel", "cleanup_failed",
+                    failure_summary(error, stage="cleanup", job_id=job_id, confirmed=False), "warning")
         await asyncio.gather(*(cancel(job_id, client) for job_id, client in tuple(self._jobs.items())))
         await super().async_will_remove_from_hass()
 
@@ -79,19 +95,22 @@ class OpenClawTextToSpeech(TextToSpeechEntity):
         # only when the caller starts consuming data, so closing an unstarted
         # response cannot strand an already-open HTTP/provider operation.
         async def audio() -> AsyncGenerator[bytes]:
+            outcome = "closed"
             client = self._runtime.client if self._runtime else self._client
             if request.options.get("profile_revision", client.profile_revision) != client.profile_revision:
-                raise HomeAssistantError("OpenClaw's voice profile changed")
+                raise speech_error("profile_changed", "OpenClaw's voice profile changed", "validation")
             action_id = request.options.get("action_id")
             job_id = None
+            timing = self._runtime.timings.start("tts") if self._runtime else None
 
             def admitted(value):
                 nonlocal job_id
                 job_id = value
+                self.diagnostics.current().phase("admitted", job_id=value, admitted=True)
                 self._jobs[value] = client
                 if action_id:
                     if not self._runtime or action_id not in self._runtime.speech_jobs:
-                        raise HomeAssistantError("OpenClaw speech action is no longer active")
+                        raise speech_error("speech_cancelled", "OpenClaw speech action is no longer active", "playback")
                     self._runtime.release_pending_speech(action_id)
                     self._runtime.speech_jobs[action_id] = (value, client)
 
@@ -100,20 +119,39 @@ class OpenClawTextToSpeech(TextToSpeechEntity):
                 async for event in events:
                     if event["type"] == "audio_start":
                         if event["extension"] != "wav":
-                            raise HomeAssistantError("OpenClaw audio requires normalization")
+                            raise speech_error("unsupported_audio_format", "OpenClaw audio requires normalization", "normalization")
                     elif event["type"] == "audio_chunk":
+                        timing and timing.mark("first_audio_received")
                         yield event["audio"]
+                outcome = "completed"
             except VoiceTransportError as error:
-                raise HomeAssistantError("OpenClaw speech stream was interrupted") from error
+                outcome = "failed"
+                raise HomeAssistantError("OpenClaw speech stream was interrupted", translation_domain=DOMAIN, translation_key="speech_stream_interrupted") from error
+            except Exception:
+                outcome = "failed"
+                raise
             finally:
+                timing and timing.finish(outcome)
                 await events.aclose()
                 if job_id:
                     self._jobs.pop(job_id, None)
                 if action_id and self._runtime:
                     self._runtime.speech_jobs.pop(action_id, None)
 
-        return TTSAudioResponse("wav", audio())
+        @observe("tts", "pipeline")
+        async def observed_audio(owner):
+            span = self.diagnostics.current()
+            total = 0
+            async with aclosing(audio()) as source:
+                async for chunk in source:
+                    total += len(chunk)
+                    span.annotate(bytes=total)
+                    span.phase("first_audio_received")
+                    yield chunk
 
+        return TTSAudioResponse("wav", observed_audio(self))
+
+    @observe("tts", "buffered_announcement")
     async def async_get_tts_audio(self, message: str, language: str, options: dict):
         async def text():
             yield message

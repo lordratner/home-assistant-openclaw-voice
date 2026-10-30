@@ -15,7 +15,8 @@ import platform
 import aiohttp
 from homeassistant.components.tts import TTSAudioRequest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+component_root = Path(os.environ.get("VOICE_PROOF_HA_PACKAGE_ROOT", str(Path(__file__).resolve().parents[1])))
+sys.path.insert(0, str(component_root))
 from custom_components.openclaw_voice.client import VoiceClient
 from custom_components.openclaw_voice.tts import OpenClawTextToSpeech
 

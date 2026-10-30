@@ -157,6 +157,11 @@ async def test_native_spoken_query_streams_audio_before_final_agent_text(hass):
         assert result["speech_requested"] is True
         assert result["response"]["speech"]["plain"]["speech"] == "Opening sentence. The ending."
         assert not entry.runtime_data.speech_jobs
+        timings = entry.runtime_data.timings.snapshot()
+        assert {value["kind"] for value in timings} == {"conversation", "tts"}
+        assert all(value["status"] == "completed" for value in timings)
+        assert next(value for value in timings if value["kind"] == "tts")["stages_ms"]["first_audio_received"] >= 0
+        assert "Opening sentence" not in str(timings)
 
 
 @pytest.mark.asyncio

@@ -3,17 +3,20 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import json
+import re
 from urllib.parse import urlsplit
 from uuid import UUID
 
 import aiohttp
+from .observability import GLOBAL, observe, safe_fields, safe_failure, failure_summary
 
 
 class VoiceTransportError(RuntimeError):
-    def __init__(self, code: str, job_id: str | None = None) -> None:
+    def __init__(self, code: str, job_id: str | None = None, diagnostic: dict | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.job_id = job_id
+        self.diagnostic = safe_failure(diagnostic)
 
 
 def canonical_id(value) -> bool:
@@ -33,7 +36,8 @@ def validate_url(value: str) -> str:
 
 
 class VoiceTransport:
-    def __init__(self, session: aiohttp.ClientSession, base_url: str, token: str, profile_revision: str) -> None:
+    def __init__(self, session: aiohttp.ClientSession, base_url: str, token: str, profile_revision: str, *, diagnostics=None) -> None:
+        self.diagnostics = diagnostics or GLOBAL
         self._base_url = validate_url(base_url)
         if not isinstance(token, str) or not 32 <= len(token) <= 4096 or not token.isascii() or any(c.isspace() for c in token):
             raise ValueError("invalid client credential")
@@ -66,49 +70,64 @@ class VoiceTransport:
         return value
 
     @classmethod
+    @observe("authority", "pair")
     async def pair(cls, session, base_url: str, pairing_code: str) -> dict:
         try:
             async with session.post(validate_url(base_url) + "/pair", json={"pairing_code": pairing_code},
                                     allow_redirects=False, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 if response.status != 200:
-                    raise VoiceTransportError("pairing_failed")
+                    raise VoiceTransportError("pairing_failed", diagnostic={"http_status": response.status, "stage": "authorization"})
                 result = await cls._json(response)
                 if (not canonical_id(result.get("client_id")) or not isinstance(result.get("client_token"), str)
                         or not isinstance(result.get("capabilities"), dict) or result["capabilities"].get("protocol_major") != 1):
                     raise VoiceTransportError("invalid_pairing_response")
                 return result
         except (aiohttp.ClientError, TimeoutError) as error:
-            raise VoiceTransportError("backend_unavailable") from error
+            raise VoiceTransportError("backend_unavailable", diagnostic=failure_summary(error, stage="http_request")) from error
 
     def _headers(self):
         return {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
 
+    @observe("http", "control")
     async def control(self, method: str, path: str, data: dict | None = None) -> dict:
+        span = self.diagnostics.current()
+        fixed = {"/capabilities": "capabilities", "/conversations": "conversation_open", "/pair": "pair_revoke"}
+        operation = fixed.get(path, "other_control")
+        job = re.fullmatch(r"/jobs/([^/]+)(?:/(cancel|tool-claim|tool-results))?", path)
+        if job and canonical_id(job[1]):
+            span.annotate(job_id=job[1])
+            operation = {None: "job_status", "cancel": "job_cancel", "tool-claim": "tool_claim", "tool-results": "tool_result"}[job[2]]
+        elif re.fullmatch(r"/conversations/[^/]+", path):
+            operation = "conversation_close"
+        span.phase(operation)
         try:
             async with self._session.request(method, self._base_url + path, json=data,
                     headers=self._headers(), allow_redirects=False, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                self.diagnostics.current().phase("response_headers", http_status=response.status)
                 if response.status != 200:
                     raise await self._response_error(response)
                 return await self._json(response)
         except (aiohttp.ClientError, TimeoutError) as error:
-            raise VoiceTransportError("backend_unavailable") from error
+            raise VoiceTransportError("backend_unavailable", diagnostic=failure_summary(error, stage="http_request")) from error
 
     async def _response_error(self, response):
         code = "backend_auth_failed" if response.status in (401, 403) else "backend_unavailable"
         job_id = None
+        diagnostic = {"http_status": response.status, "stage": "headers"}
         try:
             value = await self._json(response)
+            diagnostic.update(safe_fields(value.get("failure")))
             candidate = value.get("code")
-            if candidate in {"profile_changed", "request_conflict", "request_expired", "replay_gap", "replay_unavailable",
+            if isinstance(candidate, str) and candidate in {"profile_changed", "request_conflict", "request_expired", "replay_gap", "replay_unavailable",
                     "job_output_cancelled", "upload_already_admitted", "job_not_found", "conversation_not_found",
                     "conversation_expired", "session_missing_or_replaced", "job_capacity", "rate_limit",
                     "persistent_rebind_required", "persistent_binding_changed", "request_clock_skew"}:
                 code = candidate
             if canonical_id(value.get("job_id")):
                 job_id = value["job_id"]
-        except VoiceTransportError:
-            pass
-        return VoiceTransportError(code, job_id)
+        except VoiceTransportError as error:
+            self.diagnostics.event("http", "error_body", "failed", failure_summary(error, stage="headers", http_status=response.status), "warning")
+        return VoiceTransportError(code, job_id, diagnostic)
 
     async def capabilities(self) -> dict:
         result = await self.control("GET", "/capabilities")
@@ -116,27 +135,40 @@ class VoiceTransport:
             raise VoiceTransportError("unsupported_protocol")
         return result
 
+    @observe("job", "status")
     async def job_status(self, job_id: str) -> dict:
         if not canonical_id(job_id):
             raise VoiceTransportError("invalid_job_id")
         result = await self.control("GET", "/jobs/" + job_id)
         if result.get("job_id") != job_id:
             raise VoiceTransportError("event_ownership_mismatch")
+        status = result.get("status")
+        if isinstance(status, str) and status in {"accepted", "running", "completed", "failed", "partial_failure", "cancelled", "interrupted", "cancel_requested"}:
+            self.diagnostics.current().phase("remote_"+status, job_id=job_id, admitted=True)
         return result
 
+    @observe("job", "cancel")
     async def cancel_job(self, job_id: str) -> dict:
         if not canonical_id(job_id):
             raise VoiceTransportError("invalid_job_id")
-        return await self.control("POST", "/jobs/" + job_id + "/cancel", {})
+        result = await self.control("POST", "/jobs/" + job_id + "/cancel", {})
+        span = self.diagnostics.current()
+        if span:
+            span.phase("cancel_acknowledged", job_id=job_id, confirmed=result.get("cancellation_confirmed") is True)
+        return result
 
+    @observe("http", "wire_events")
     async def wire_events(self, path: str, request_id: str, *, data=None,
                           after: int = 0, job_id: str | None = None) -> AsyncIterator[dict]:
         terminal = False
         sequence = after
+        span = self.diagnostics.current()
+        span.annotate(trace_id=request_id, request_id=request_id, job_id=job_id)
         try:
             async with self._session.request("POST" if data is not None else "GET", self._base_url + path,
                     data=data, headers={**self._headers(), "Content-Type": "application/x-ndjson", "Accept": "application/x-ndjson"},
                     allow_redirects=False, timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=60)) as response:
+                span.phase("response_headers", http_status=response.status)
                 if response.status != 200:
                     raise await self._response_error(response)
                 if response.content_type != "application/x-ndjson":
@@ -146,6 +178,7 @@ class VoiceTransport:
                     if not canonical_id(header_id) or job_id and header_id != job_id:
                         raise VoiceTransportError("invalid_job_id")
                     job_id = header_id
+                    span.annotate(job_id=job_id, admitted=True)
                 async for line in response.content:
                     if len(line) > 65536 or not line.endswith(b"\n") or terminal:
                         raise VoiceTransportError("invalid_event_framing", job_id)
@@ -158,11 +191,14 @@ class VoiceTransport:
                     if event["job_id"] != job_id or type(event.get("sequence")) is not int or event["sequence"] != sequence + 1:
                         raise VoiceTransportError("event_sequence_mismatch", job_id)
                     sequence += 1
+                    span.annotate(frames=sequence-after)
+                    if sequence == after+1:
+                        span.phase("first_event", job_id=job_id, admitted=True)
                     if sequence > 65536:
                         raise VoiceTransportError("event_limit", job_id)
                     kind = event.get("type")
                     if kind in ("error", "cancelled"):
-                        raise VoiceTransportError("backend_job_failed", job_id)
+                        raise VoiceTransportError("backend_job_failed", job_id, safe_fields(event.get("failure")))
                     if kind == "done":
                         terminal = True
                     event = {**event, "job_id": job_id}
@@ -170,6 +206,6 @@ class VoiceTransport:
                 if not terminal:
                     raise VoiceTransportError("stream_interrupted", job_id)
         except (aiohttp.ClientError, TimeoutError) as error:
-            raise VoiceTransportError("voice_transport_failed", job_id) from error
+            raise VoiceTransportError("voice_transport_failed", job_id, failure_summary(error, stage="events")) from error
         except (ValueError, KeyError, TypeError) as error:
             raise VoiceTransportError("invalid_event", job_id) from error

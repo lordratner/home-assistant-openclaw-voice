@@ -11,7 +11,8 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+component_root = Path(os.environ.get("VOICE_PROOF_HA_PACKAGE_ROOT", str(Path(__file__).resolve().parents[1])))
+sys.path.insert(0, str(component_root))
 from homeassistant import bootstrap, loader
 from homeassistant.auth import auth_manager_from_config
 from homeassistant.components import stt, tts
@@ -20,6 +21,8 @@ from homeassistant.components.assist_pipeline.pipeline import async_update_pipel
 from homeassistant.components.assist_satellite import AssistSatelliteEntity, AssistSatelliteEntityFeature
 from homeassistant.config_entries import ConfigEntries
 from homeassistant.core import HomeAssistant
+from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.components.homeassistant.exposed_entities import async_expose_entity
 from homeassistant.setup import async_setup_component
 from custom_components.openclaw_voice.const import DOMAIN
 
@@ -47,7 +50,7 @@ async def main():
     with tempfile.TemporaryDirectory(prefix="ha-openclaw-native-") as directory:
         components = Path(directory) / "custom_components"
         components.mkdir()
-        (components / DOMAIN).symlink_to(Path(__file__).resolve().parents[1] / "custom_components" / DOMAIN, target_is_directory=True)
+        (components / DOMAIN).symlink_to(component_root / "custom_components" / DOMAIN, target_is_directory=True)
         hass = HomeAssistant(directory)
         loader.async_setup(hass)
         hass.config_entries = ConfigEntries(hass, {})
@@ -111,12 +114,42 @@ async def main():
                 blocking=True, return_response=True)
             assert followup["session_mode"] == "per_conversation"
             assert entry.runtime_data.default_mode == "persistent"
+            assert await async_setup_component(hass, "homeassistant", {})
+            assert await async_setup_component(hass, "intent", {})
+            hass.states.async_set("light.fixture", "off", {"friendly_name": "Fixture Light"})
+            hass.states.async_set("light.hidden", "off", {"friendly_name": "Hidden Light"})
+            async_expose_entity(hass, "conversation", "light.fixture", True)
+            async_expose_entity(hass, "conversation", "light.hidden", False)
+            effects = []
+            async def turn_on(call):
+                effects.append(call.data)
+                hass.states.async_set("light.fixture", "on", {"friendly_name": "Fixture Light"})
+            hass.services.async_register("light", "turn_on", turn_on)
+            options = await hass.config_entries.options.async_init(entry.entry_id)
+            updated = await hass.config_entries.options.async_configure(options["flow_id"],
+                {"session_mode": "persistent", CONF_LLM_HASS_API: ["assist"]})
+            assert updated["type"] == "create_entry"
+            await hass.async_block_till_done()
+            for name in ("Fixture Light", "Hidden Light"):
+                native = await hass.services.async_call(DOMAIN, "query", {"config_entry_id": entry.entry_id,
+                    "session_mode": "per_conversation", "prompt": "native-assist-proof: turn on " + name},
+                    blocking=True, return_response=True)
+                assert native["response"]["speech"]["plain"]["speech"] == "Native Assist result received.", native
+            assert len(effects) == 1, effects
+            diagnostics = entry.runtime_data.diagnostics.snapshot()
+            assert diagnostics["schema"] == 1
+            assert len(diagnostics["recent"]) <= 128 and len(diagnostics["failures"]) <= 32
+            assert any(e.get("request_id") and e.get("job_id") for e in diagnostics["recent"])
+            logged = json.dumps(diagnostics)
+            for private in ["Fixture Light", "Hidden Light", "SYNTHETIC_TRANSCRIPT_OK", "native-assist-proof"]:
+                assert private not in logged
             assert not entry.runtime_data.tasks and not entry.runtime_data.speech_jobs
             assert await hass.config_entries.async_unload(entry.entry_id)
             print(json.dumps({"status": "passed", "native_config_flow": True, "registered_entities": 3,
                 "stt": "native_batch", "query_action": True, "interactive_action": True,
                 "followup_mode_preserved": True, "unloaded": True, "audio_bytes": len(audio),
-                "audible_playback_tested": False, **moments}))
+                "native_assist": True, "exposed_effects": len(effects), "hidden_effects": 0,
+                "audible_playback_tested": False, "structured_logging_checked": True, **moments}))
         finally:
             await hass.async_stop(force=True)
 

@@ -4,6 +4,7 @@ import json
 import pytest
 
 from custom_components.openclaw_voice.diagnostics import async_get_config_entry_diagnostics
+from custom_components.openclaw_voice.observability import GLOBAL
 
 
 @pytest.mark.asyncio
@@ -24,4 +25,8 @@ async def test_diagnostics_never_echo_private_config_or_backend_extensions():
     assert result["active_actions"] == 1
     assert result["registered_platforms"] == ["conversation", "stt", "tts"]
     del entry.runtime_data
-    assert (await async_get_config_entry_diagnostics(None, entry))["loaded"] is False
+    GLOBAL.event("integration", "setup", "failed", {"http_status": 401, "category": "authentication"})
+    unloaded = await async_get_config_entry_diagnostics(None, entry)
+    assert unloaded["loaded"] is False
+    assert unloaded["setup_observability"]["failures"]
+    assert private not in json.dumps(unloaded)

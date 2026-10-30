@@ -18,6 +18,9 @@ SessionMode = Literal["persistent", "per_conversation"]
 
 class InteractionBindingError(RuntimeError):
     """The native start did not create the expected owned conversation."""
+    def __init__(self, message, *, code="action_binding_failed"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,8 @@ class ActionConversationBindings:
         pending_ids = {value.conversation_id for value in self._starts.values() if value.active}
         for conversation_id, expires in tuple(self._expires.items()):
             if expires <= now and conversation_id not in pending_ids:
+                if hasattr(self, "diagnostics"):
+                    self.diagnostics.event("action_binding", "retention", "expired", {"reason": "conversation_expired"})
                 self.close(conversation_id)
 
     async def start(
@@ -71,23 +76,23 @@ class ActionConversationBindings:
         native_start: Callable[[], Awaitable[None]],
     ) -> Binding:
         if self._closed:
-            raise InteractionBindingError("integration is unloaded")
+            raise InteractionBindingError("integration is unloaded", code="backend_stopping")
         self._purge()
         if mode not in ("persistent", "per_conversation"):
             raise ValueError("invalid session mode")
         if not satellite_id.startswith("assist_satellite."):
             raise ValueError("a satellite target is required")
         if satellite_id in self._starts:
-            raise InteractionBindingError("satellite already has a pending start")
+            raise InteractionBindingError("satellite already has a pending start", code="conversation_busy")
         if len(self._bindings) + len(self._starts) >= self._limit:
-            raise InteractionBindingError("conversation binding capacity exceeded")
+            raise InteractionBindingError("conversation binding capacity exceeded", code="conversation_capacity")
         pending = _Pending(self._owner, uuid4().hex, satellite_id, mode)
         self._starts[satellite_id] = pending
         token = self._pending.set(pending)
         try:
             await native_start()
             if self._closed or pending.conversation_id is None:
-                raise InteractionBindingError("native start created no correlated chat log")
+                raise InteractionBindingError("native start created no correlated chat log", code="action_correlation_missing")
             self._expires[pending.conversation_id] = self._clock() + self._ttl
             return self._bindings[pending.conversation_id]
         except BaseException:
@@ -108,13 +113,13 @@ class ActionConversationBindings:
         if event_type != "created":
             return
         if not conversation_id or not isinstance(data.get("chat_log"), dict):
-            raise InteractionBindingError("invalid chat-log creation event")
+            raise InteractionBindingError("invalid chat-log creation event", code="action_correlation_invalid")
         if pending.conversation_id is not None:
             if pending.conversation_id != conversation_id:
-                raise InteractionBindingError("ambiguous native conversation creation")
+                raise InteractionBindingError("ambiguous native conversation creation", code="action_correlation_ambiguous")
             return
         if conversation_id in self._bindings:
-            raise InteractionBindingError("conversation already bound")
+            raise InteractionBindingError("conversation already bound", code="action_correlation_conflict")
         self._bindings[conversation_id] = Binding(
             pending.interaction_id, conversation_id, pending.satellite_id, pending.mode
         )

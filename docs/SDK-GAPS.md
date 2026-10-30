@@ -1,6 +1,32 @@
 # Native SDK capability notes
 
-## Reliable streaming STT finalization
+## Optional finite-input STT with the companion dev.6 bridge
+
+The companion OpenClaw dev.6 plugin consumes the optional public injected
+`api.runtime.mediaUnderstanding.transcribeAudioStream` method. The reviewed core
+change is PR187371 at `79b395a14b0a03bf31c66a88e950a7c13af83232`, with a separate
+OpenClaw 2026.10.3 backport being prepared. This document does not claim that
+the backport or bridge candidate has been activated live.
+
+The existing HA dev.3 client already streams bounded PCM16 mono 16 kHz input
+and waits for one finalized transcript. It does not choose OC providers/models,
+implement vendor protocols or dispatch from partial recognition. No HA code,
+manifest, protocol-major change or HA restart is required solely for this bridge
+capability. Capabilities/profile refresh on the normal 30-second coordinator.
+
+OC owns provider/model policy and finite-input completion. Runtime-method
+availability advertises provider-dependent capability, not support for every
+configured model. An older host, unsupported selection or unavailable capability
+retains native batch fallback. Unsupported must be determined before input
+consumption. Once streaming is admitted, failure/cancellation does not trigger
+batch or another-provider replay. Both paths keep the existing v1 PCM upload and
+final transcript framing; only the backend's actual reported mode differs.
+
+This is source/contract qualification, not new paired-runtime, live-provider,
+latency or microphone evidence. Physical clarification -> answer -> stop and
+wake-word-free listening remain hardware-observed acceptance gates.
+
+## Stock OpenClaw 2026.10.3 limitation (without the core change)
 
 The tested OpenClaw 2026.10.3 realtime-transcription surface exposes connection,
 audio send and close/connectivity operations. It does not expose a usable
@@ -13,12 +39,12 @@ partial transcript. That can omit late words or execute a tool-bearing turn from
 unfinished user speech. This is a **host SDK contract gap**, not a blanket claim
 that OpenAI/ElevenLabs or every provider lacks realtime transcription.
 
-The implemented path uploads microphone chunks, then calls OC's native batch
+On that stock host, the bridge uploads microphone chunks, then calls OC's native batch
 transcription capability once at finalized input. Capabilities honestly report
 `batch` and `native_realtime_finalization_contract_unavailable`. It is functional
 fallback under the accepted streaming-first policy; it is not realtime STT.
 
-A minimal future upstream proposal should supply:
+The reviewed finite-input core change addresses these requirements:
 
 - Selected-agent/auth context and explicit supported audio formats at creation.
 - Bounded/backpressured audio writes and a caller-owned abort signal.
@@ -28,9 +54,9 @@ A minimal future upstream proposal should supply:
 - Contract tests for delayed finals, provider errors, unsupported commit, abort,
   reconnect, multiple channels/utterances and no accidental agent dispatch.
 
-No upstream source, installed runtime bundle, provider configuration or PR was
-changed for this proposal. Any upstream implementation is a separate project
-assignment; this report is reviewable without expanding that boundary.
+Installing only HA does not add this core/runtime capability. Core installation,
+bridge activation and real-provider testing remain separate from this HA
+documentation update; it changes no installed runtime or provider configuration.
 
 ## Other evidence limits
 

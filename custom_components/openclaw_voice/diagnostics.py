@@ -3,6 +3,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import CONF_SESSION_MODE, DEFAULT_SESSION_MODE, SESSION_MODES
+from .observability import GLOBAL
+from .observability import safe_fields
 
 
 def _integer_fields(value, fields):
@@ -16,6 +18,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     runtime = getattr(entry, "runtime_data", None)
     result = {"config_version": entry.version, "loaded": runtime is not None,
               "default_mode": mode if mode in SESSION_MODES else "invalid"}
+    result["setup_observability"] = GLOBAL.snapshot()
     if runtime is None:
         return result
     caps = runtime.capabilities
@@ -30,4 +33,17 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     result["active_speech_jobs"] = len(runtime.speech_jobs)
     result["stt_batch_available"] = "batch" in caps.get("stt", {}).get("modes", [])
     result["tts_incremental_text"] = caps.get("tts", {}).get("input") == "incremental_text"
+    result["stage_readiness"] = {}
+    for name in ("conversation", "stt", "tts"):
+        value = caps.get("stages", {}).get(name)
+        if not isinstance(value, dict):
+            continue
+        result["stage_readiness"][name] = {
+            **({"state": value["state"]} if value.get("state") in {"unknown", "configured", "unavailable", "verified"} else {}),
+            "available": value.get("available") if type(value.get("available")) is bool else None,
+            "verified": value.get("verified") is True, **safe_fields({"reason": value.get("reason")}),
+            **_integer_fields(value, ("last_success_at", "last_failure_at", "verified_at")),
+        }
+    result["local_timings"] = runtime.timings.snapshot() if hasattr(runtime, "timings") else []
+    result["observability"] = runtime.diagnostics.snapshot() if hasattr(runtime, "diagnostics") else GLOBAL.snapshot()
     return result

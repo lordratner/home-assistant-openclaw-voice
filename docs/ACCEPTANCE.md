@@ -1,10 +1,24 @@
+# Current product candidate evidence — 2026-10-29
+
+Bridge dev10 / HAdev6, protocol1.2. Full module suites138OC+90HA passed. Added
+regressions cover missing optional dependencies, native-policy batch alternatives
+and legacy explicit selection, independent stage languages/readiness, duplicate
+and concurrent pairing, v1 migration, same-backend URL moves, wrong-backend/agent
+reauth guards and native buffered HA TTS with unavailable OC TTS. Offline metadata/
+translation/package validators passed. Disposable native source pair passed;
+archive-loaded proof and hashes are recorded separately with packaged artifacts.
+
+No new real-provider/device acceptance, installed activation, public CI success or
+formal quality tier is claimed. See PRODUCT.md, COMPATIBILITY.md and QUALITY.md.
+The dated sections below are historical evidence, not current deployment status.
+
 # Acceptance evidence — 2026-10-28 development candidate
 
 Evidence levels are distinct. Automated checks are not the 42 planned acceptance
 cases, and a native synthetic fixture is not a real-provider or physical-speaker
 test. No release gate is waived by this document.
 
-## Executed
+## Historical executed development checks
 
 - Node suite: 74 tests passed, zero failed/cancelled/skipped.
 - HA suite: 40 tests passed; dependency/HA deprecation and AppKey warnings remain.
@@ -45,7 +59,7 @@ remain in `planning/05-ACCEPTANCE-AND-TEST-MATRIX.md`.
 | T03, T04 | Native credential resolver/overrides and capability fallback exercised with synthetic keys; real-account/stage-local failure matrix pending |
 | T05 | Not run: requires approved real-provider calls |
 | T07, T12 | Run-scoped model/thinking and unchanged preferences, native lock rejection; actual fast-tier/account/runtime support matrix still partial |
-| T08 | Native finalized-input batch path proven; realtime finalization SDK gap documented, no speculative turn dispatch |
+| T08 | Historical native batch path proven; optional realtime candidate/remaining gates below, no speculative turn dispatch |
 | T09 | Native early playback-byte delivery and separate gated provider-EOF decode proven; audible timing not run |
 | T10, T11 | Unsupported-stream fallback, buffered input, no replay on provider failure exercised |
 | T13 | Speakable projection, reasoning/tool/fallback exclusion, multi-message and Unicode contract checks |
@@ -68,9 +82,10 @@ remain in `planning/05-ACCEPTANCE-AND-TEST-MATRIX.md`.
 
 ## What is not claimed
 
-No production service/config/installed bundle, provider account, real user audio,
-HA default pipeline or household device was changed. No public release or HACS
-publication occurred. This candidate is **not release-certified**: the remaining
+The original development checks above did not change production services/config,
+installed bundles, provider accounts, real user audio, HA default pipelines or
+household devices. No public release or HACS publication occurred in that work.
+This candidate is **not release-certified**: the remaining
 real-provider/runtime/approval/client/hardware and installation/rollback gates
 must be run in an explicitly approved controlled canary.
 
@@ -88,3 +103,52 @@ rejected that because only a registered harness owner may create/patch locked
 sessions. The proof now registers its own explicit-only synthetic harness and
 creates only its own locked session through the public API. It does not loosen
 ownership, patch core, or alter the production plugin's authority.
+
+## 2026-10-28 next-turn settings/timing checkpoint
+
+Candidate 0.0.1-dev.1: 81 OC + 41 HA tests pass; extended native proof verifies
+in-flight settings isolation, next-turn model/thinking switch on the same handle,
+retry recovery without redispatch, eight owner-RPC denials, content-free timing,
+and continued early decoded audio. This is disposable-runtime proof only. Live
+installation, realistic latency benchmarking and acoustic start timing remain
+separate acceptance gates. See docs/TIMING.md for measurement boundaries.
+
+## 2026-10-29 optional realtime/clarification qualification
+
+HA integration dev.3 already forwards bounded PCM uploads and the terminal
+`continue_conversation` boolean to native HA APIs. Companion bridge dev.6 uses
+the optional public finite-transcription runtime from the reviewed core change;
+capability depends on the configured provider/model. Stock hosts and unsupported
+selections retain batch STT, with no automatic replay after streaming admission.
+The existing v1 wire contract and HA code need no change for these features.
+Backend capabilities/profile refresh every 30 seconds.
+
+This section records source/contract review, not additional paired-runtime or
+inference execution. Candidate-core paired proof, live provider finalization and
+real cold/warm latency remain separate gates. Physical clarification playback
+must be followed by listening without another wake word; its answer must retain
+conversation context, and completion/stop must end listening. A terminal flag,
+device feature bit or synthetic satellite is not proof of that hardware behavior.
+
+## Stale binding recovery candidate — 2026-10-29
+
+Bridge dev.7 + HA dev.4: scoped regression coverage includes retained-ID profile
+change/expiry, same native history/mode, caller/target fences, overlap/cancellation
+and known-job no-redispatch even when replay/status fails before text. Native
+HA2026.10.4 retains the satellite ID through the legacy null-ID error and then
+processes clarification/follow-up with the replacement transport. The isolated
+production-plugin/HA paired proof also passes with synthetic model/speech
+providers. These are local/disposable proofs, not installation or physical
+acceptance of these versions. Live activation and bathroom retesting remain
+separate gates.
+
+## Comprehensive logging candidate — 2026-10-29
+
+OCdev.9 + HAdev.5: all36source modules reviewed, shared diagnostic contract and
+per-module audit recorded. OC125tests and HA73tests pass. Native paired proof
+checks bounded rings, common request/job/span correlation, no private canaries,
+normal/hidden-target native controls, continuation/stop/recovery and early audio.
+Fault injection covers auth/status, metadata/receipt/storage, timeout, decoder
+races, primary-vs-cleanup errors, startup diagnostics and actual action receipt
+correlation. This is source/fixture proof, not deployed logging or physical
+acceptance. See [logging guide](LOGGING.md).

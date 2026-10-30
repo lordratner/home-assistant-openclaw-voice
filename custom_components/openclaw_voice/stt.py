@@ -5,8 +5,11 @@ from homeassistant.components import stt
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import VoiceTransportError
+from .observability import observe, GLOBAL
+from .capabilities import language_facts
 
 
+@observe("platform", "stt_setup")
 async def async_setup_entry(hass, entry, async_add_entities):
     entity = OpenClawSpeechToText(entry.runtime_data)
     entry.runtime_data.entities["stt"] = entity
@@ -15,7 +18,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class OpenClawSpeechToText(CoordinatorEntity, stt.SpeechToTextEntity):
     _attr_has_entity_name = True
-    _attr_name = "Speech recognition"
+    _attr_translation_key = "recognition"
 
     def __init__(self, runtime):
         super().__init__(runtime.coordinator)
@@ -25,7 +28,11 @@ class OpenClawSpeechToText(CoordinatorEntity, stt.SpeechToTextEntity):
 
     @property
     def supported_languages(self):
-        return self.runtime.capabilities["languages"]
+        return language_facts(self.runtime.capabilities, "stt")[0]
+
+    @property
+    def available(self):
+        return self.runtime.stage_available("stt")
 
     @property
     def supported_formats(self):
@@ -47,15 +54,32 @@ class OpenClawSpeechToText(CoordinatorEntity, stt.SpeechToTextEntity):
     def supported_channels(self):
         return [stt.AudioChannels.CHANNEL_MONO]
 
+    @observe("stt", "pipeline")
     async def async_process_audio_stream(self, metadata, stream):
+        diagnostics = getattr(self.runtime, "diagnostics", GLOBAL)
+        span = diagnostics.current()
+        timing = self.runtime.timings.start("stt") if hasattr(self.runtime, "timings") else None
+        outcome = "failed"
         if not self.check_metadata(metadata):
+            span.fail(VoiceTransportError("invalid_audio_metadata"), stage="validation")
+            if timing:
+                timing.finish("failed")
             return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
         task = asyncio.create_task(self.runtime.client.transcribe(stream, metadata.language), name="OpenClaw transcription")
         self.runtime.tasks.add(task)
         try:
             result = await task
+            outcome = "completed"
+            span.phase("no_speech" if result.get("no_speech") else "recognized",
+                       **({"reason": "no_speech"} if result.get("no_speech") else {}))
             return stt.SpeechResult(result["text"], stt.SpeechResultState.SUCCESS)
-        except VoiceTransportError:
+        except VoiceTransportError as error:
+            span.fail(error, stage="stt_transcription")
             return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
+        except asyncio.CancelledError:
+            outcome = "closed"
+            raise
         finally:
+            if timing:
+                timing.finish(outcome)
             self.runtime.tasks.discard(task)

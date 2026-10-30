@@ -36,6 +36,29 @@ def event(request_id, sequence, **value):
 
 
 @pytest.mark.asyncio
+async def test_admission_survives_failure_in_replay_and_status_even_before_text():
+    posts = 0
+
+    async def handler(request):
+        nonlocal posts
+        if request.path == "/turns":
+            posts += 1
+            payload = json.loads(await request.content.readline())
+            return web.Response(text=json.dumps(event(payload["request_id"], 1, type="phase", phase="running")) + "\n",
+                                content_type="application/x-ndjson")
+        if request.path.endswith("/cancel"):
+            return web.json_response({})
+        return web.json_response({"code": "profile_changed"}, status=409)
+
+    async with backend(handler) as client:
+        with pytest.raises(VoiceTransportError) as caught:
+            _ = [value async for value in client.turn(HANDLE, "one device action")]
+        assert caught.value.code == "profile_changed"
+        assert caught.value.job_id == JOB
+    assert posts == 1
+
+
+@pytest.mark.asyncio
 async def test_fragmented_json_control_response_is_fully_read_before_parsing():
     async def handler(request):
         response = web.StreamResponse(headers={"Content-Type": "application/json"})

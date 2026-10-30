@@ -9,6 +9,7 @@ import json
 from uuid import uuid7
 
 from .transport import VoiceTransport, VoiceTransportError, canonical_id
+from .observability import observe, failure_summary
 
 
 def encode(value: dict) -> bytes:
@@ -16,6 +17,7 @@ def encode(value: dict) -> bytes:
 
 
 class VoiceClient(VoiceTransport):
+    @observe("bindings", "open")
     async def open_conversation(self, conversation_id: str, mode: str) -> dict:
         if mode not in ("persistent", "per_conversation"):
             raise ValueError("invalid session mode")
@@ -27,8 +29,10 @@ class VoiceClient(VoiceTransport):
             raise VoiceTransportError("invalid_conversation_binding")
         return result
 
+    @observe("tts", "speech")
     async def speech(self, text: AsyncIterator[str], language: str, *, on_job=None) -> AsyncIterator[dict]:
         request_id = str(uuid7())
+        self.diagnostics.current().annotate(trace_id=request_id, request_id=request_id)
 
         async def upload():
             yield encode({"type": "start", "protocol_major": 1, "request_id": request_id,
@@ -102,8 +106,11 @@ class VoiceClient(VoiceTransport):
         finally:
             await source.aclose()
 
+    @observe("stt", "transcribe")
     async def transcribe(self, audio: AsyncIterator[bytes], language: str) -> dict:
         request_id = str(uuid7())
+        span = self.diagnostics.current()
+        span.annotate(trace_id=request_id, request_id=request_id)
 
         async def upload():
             yield encode({"type": "start", "protocol_major": 1, "request_id": request_id,
@@ -115,6 +122,9 @@ class VoiceClient(VoiceTransport):
                 if not isinstance(value, bytes) or len(value) % 2:
                     raise VoiceTransportError("invalid_pcm_audio")
                 total += len(value)
+                span.annotate(bytes=total, frames=sequence)
+                if total == len(value):
+                    span.phase("first_input")
                 if total > 2097152:
                     raise VoiceTransportError("audio_limit")
                 for offset in range(0, len(value), 32768):
@@ -148,16 +158,21 @@ class VoiceClient(VoiceTransport):
             raise VoiceTransportError("stream_interrupted")
         return {"text": transcript, "no_speech": no_speech}
 
-    async def turn(self, handle: str, text: str, request_id: str | None = None, *, context: str | None = None) -> AsyncIterator[dict]:
+    @observe("conversation", "turn")
+    async def turn(self, handle: str, text: str, request_id: str | None = None, *, context: str | None = None, assist: dict | None = None) -> AsyncIterator[dict]:
         if not canonical_id(handle) or not isinstance(text, str) or not text.strip() or len(text.encode()) > 65536:
             raise VoiceTransportError("invalid_turn")
         request_id = request_id or str(uuid7())
+        span = self.diagnostics.current()
+        span.annotate(trace_id=request_id, request_id=request_id)
         payload = {"protocol_major": 1, "profile_revision": self._revision, "request_id": request_id,
                    "conversation_handle": handle, "text": text}
         if context:
             if len(context.encode()) > 8192:
                 raise VoiceTransportError("context_limit")
             payload["context"] = context
+        if assist is not None:
+            payload["assist"] = assist
         job_id = None
         sequence = 0
         messages: dict[int, str] = {}
@@ -185,6 +200,9 @@ class VoiceClient(VoiceTransport):
                         messages[identity] = messages.get(identity, "") + event["text"]
                         if sum(len(value.encode()) for value in messages.values()) > 65536:
                             raise VoiceTransportError("text_limit", job_id)
+                    elif kind == "tool_call":
+                        if assist is None or not canonical_id(event.get("call_id")) or not isinstance(event.get("tool_name"), str) or not isinstance(event.get("tool_args"), dict):
+                            raise VoiceTransportError("invalid_assist_call", job_id)
                     elif kind == "done":
                         if type(event.get("continue_conversation", False)) is not bool:
                             raise VoiceTransportError("invalid_completion", job_id)
@@ -203,6 +221,7 @@ class VoiceClient(VoiceTransport):
                 recoverable = {"voice_transport_failed", "stream_interrupted", "replay_unavailable", "replay_gap"}
                 if not job_id or error.code not in recoverable:
                     raise
+                span.phase("same_job_replay", job_id=job_id, admitted=True)
                 # Recover output of the same job. Never POST the prompt a second time.
                 try:
                     async with aclosing(checked(self.wire_events(f"/jobs/{job_id}/events?after={sequence}",
@@ -210,6 +229,7 @@ class VoiceClient(VoiceTransport):
                         async for event in source:
                             yield event
                 except VoiceTransportError:
+                    span.phase("same_job_status", job_id=job_id, admitted=True)
                     status = await self.job_status(job_id)
                     state = status.get("status")
                     if state != "completed":
@@ -230,10 +250,33 @@ class VoiceClient(VoiceTransport):
                            "continue_conversation": result.get("continue_conversation", False), "recovered": True}
             if not terminal:
                 raise VoiceTransportError("stream_interrupted", job_id)
+        except VoiceTransportError as error:
+            # Even a recovery/status request can fail before yielding output.
+            # Preserve known admission so the caller can never redispatch it.
+            if job_id and error.job_id is None:
+                error.job_id = job_id
+            raise
         finally:
             if job_id and not terminal and not self._session.closed:
                 try:
                     async with asyncio.timeout(5):
                         await self.cancel_job(job_id)
-                except (VoiceTransportError, TimeoutError):
-                    pass
+                except (VoiceTransportError, TimeoutError) as error:
+                    self.diagnostics.event("conversation", "cancel", "cleanup_failed",
+                        failure_summary(error, stage="cleanup", job_id=job_id, confirmed=False), "warning")
+
+    @observe("assist", "result")
+    async def tool_result(self, job_id: str, result: dict) -> None:
+        if not canonical_id(job_id):
+            raise VoiceTransportError("invalid_job_id")
+        reply = await self.control("POST", f"/jobs/{job_id}/tool-results", result)
+        if reply.get("accepted") is not True:
+            raise VoiceTransportError("assist_result_rejected", job_id)
+
+    @observe("assist", "claim")
+    async def tool_claim(self, job_id: str, call_id: str) -> None:
+        if not canonical_id(job_id) or not canonical_id(call_id):
+            raise VoiceTransportError("invalid_assist_call")
+        reply = await self.control("POST", f"/jobs/{job_id}/tool-claim", {"call_id": call_id})
+        if reply.get("claimed") is not True:
+            raise VoiceTransportError("assist_claim_rejected", job_id)
